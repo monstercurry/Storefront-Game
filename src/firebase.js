@@ -92,9 +92,6 @@ function showStaffLogin(message = "") {
     try {
       await signInWithEmailAndPassword(auth, emailInput.value.trim(), passwordInput.value);
       window.localStorage.setItem(STAFF_EMAIL_KEY, emailInput.value.trim());
-      if (loginOverlay) {
-        errorText.textContent = "Signed in, checking staff access...";
-      }
     } catch (error) {
       errorText.textContent = `Sign-in failed (${error.code || error.message})`;
       console.warn("Staff sign-in failed", error);
@@ -117,6 +114,10 @@ export const authReady = new Promise((resolve) => {
       return;
     }
 
+    if (loginOverlay && !user.isAnonymous) {
+      loginOverlay.querySelector("#staffLoginError").textContent = `Signed in, checking staff/${user.uid} ...`;
+    }
+
     try {
       const staff = await isStaff(user);
       if (checkId !== authCheckId) {
@@ -127,7 +128,7 @@ export const authReady = new Promise((resolve) => {
         resolve(user);
         return;
       }
-      showStaffLogin(user.isAnonymous ? "" : "This account is not set up as staff.");
+      showStaffLogin(user.isAnonymous ? "" : `Not set up as staff: staff/${user.uid} is not true in the database.`);
     } catch (error) {
       if (checkId !== authCheckId) {
         return;
