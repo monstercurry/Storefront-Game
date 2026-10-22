@@ -43,7 +43,15 @@ async function isStaff(user) {
   if (!user) {
     return false;
   }
-  const snapshot = await get(ref(db, `${STAFF_PATH}/${user.uid}`));
+  console.log("[staff-check] checking", `${STAFF_PATH}/${user.uid}`);
+  const snapshot = await Promise.race([
+    get(ref(db, `${STAFF_PATH}/${user.uid}`)),
+    new Promise((_, reject) => setTimeout(
+      () => reject(new Error("database did not respond — check App Check / network, see console")),
+      10000
+    ))
+  ]);
+  console.log("[staff-check] value", snapshot.val());
   return snapshot.val() === true;
 }
 
@@ -84,6 +92,9 @@ function showStaffLogin(message = "") {
     try {
       await signInWithEmailAndPassword(auth, emailInput.value.trim(), passwordInput.value);
       window.localStorage.setItem(STAFF_EMAIL_KEY, emailInput.value.trim());
+      if (loginOverlay) {
+        errorText.textContent = "Signed in, checking staff access...";
+      }
     } catch (error) {
       errorText.textContent = `Sign-in failed (${error.code || error.message})`;
       console.warn("Staff sign-in failed", error);
