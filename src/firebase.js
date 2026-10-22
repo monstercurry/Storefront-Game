@@ -89,13 +89,19 @@ function showStaffLogin(message = "") {
   loginOverlay.querySelector("#staffLoginForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     errorText.textContent = "Signing in...";
+    let user;
     try {
-      await signInWithEmailAndPassword(auth, emailInput.value.trim(), passwordInput.value);
+      // Step 1: Firebase Authentication checks the email + password.
+      ({ user } = await signInWithEmailAndPassword(auth, emailInput.value.trim(), passwordInput.value));
       window.localStorage.setItem(STAFF_EMAIL_KEY, emailInput.value.trim());
     } catch (error) {
       errorText.textContent = `Sign-in failed (${error.code || error.message})`;
       console.warn("Staff sign-in failed", error);
+      return;
     }
+    // Step 2: check this account's uid is listed under staff/. Run it directly here,
+    // because re-signing in as the same account doesn't fire onAuthStateChanged again.
+    checkStaffAccess(user);
   });
 }
 
@@ -104,37 +110,43 @@ function hideStaffLogin() {
   loginOverlay = null;
 }
 
+let resolveAuthReady;
+let staffCheckId = 0;
+
 // Resolves once a staff account is signed in. Anonymous or other users are ignored.
-let authCheckId = 0;
 export const authReady = new Promise((resolve) => {
-  onAuthStateChanged(auth, async (user) => {
-    const checkId = ++authCheckId;
-    if (!user) {
-      showStaffLogin();
+  resolveAuthReady = resolve;
+});
+
+async function checkStaffAccess(user) {
+  const checkId = ++staffCheckId;
+  if (!user || user.isAnonymous) {
+    showStaffLogin();
+    return;
+  }
+
+  showStaffLogin(`Signed in, checking staff/${user.uid} ...`);
+  try {
+    const staff = await isStaff(user);
+    if (checkId !== staffCheckId) {
+      return; // a newer check started while this one was running
+    }
+    if (staff) {
+      hideStaffLogin();
+      resolveAuthReady(user);
       return;
     }
-
-    if (loginOverlay && !user.isAnonymous) {
-      loginOverlay.querySelector("#staffLoginError").textContent = `Signed in, checking staff/${user.uid} ...`;
+    showStaffLogin(`Not set up as staff: staff/${user.uid} is not true in the database.`);
+  } catch (error) {
+    if (checkId !== staffCheckId) {
+      return;
     }
+    console.warn("Could not check staff access", error);
+    showStaffLogin(`Could not check staff access (${error.code || error.message})`);
+  }
+}
 
-    try {
-      const staff = await isStaff(user);
-      if (checkId !== authCheckId) {
-        return; // a newer sign-in happened while we were checking
-      }
-      if (staff) {
-        hideStaffLogin();
-        resolve(user);
-        return;
-      }
-      showStaffLogin(user.isAnonymous ? "" : `Not set up as staff: staff/${user.uid} is not true in the database.`);
-    } catch (error) {
-      if (checkId !== authCheckId) {
-        return;
-      }
-      console.warn("Could not check staff access", error);
-      showStaffLogin(`Could not check staff access (${error.code || error.message})`);
-    }
-  });
+// On page load, Firebase restores a remembered login (or reports none).
+onAuthStateChanged(auth, (user) => {
+  checkStaffAccess(user);
 });
