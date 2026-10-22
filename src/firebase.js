@@ -1,6 +1,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
 import { initializeAppCheck, ReCaptchaEnterpriseProvider } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app-check.js";
-import { getDatabase } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-database.js";
+import { getDatabase, get, ref } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-database.js";
 import { getFirestore } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 import {
   getAuth,
@@ -18,9 +18,10 @@ export const firebaseConfig = {
   appId: "1:805711728537:web:9aace7f18cd32020e78d08"
 };
 
-// The kiosk staff account created in Firebase Authentication (Email/Password).
-// The UID is not secret; the password is never stored in this code.
-const STAFF_UID = "kkPf48QNkLNpCfmqGneazdInQ5o2";
+// Staff accounts are listed in the Realtime Database at staff/{uid}: true.
+// Add or remove staff there in the Firebase console; nothing is hardcoded here.
+// The database rules only let a signed-in user read their own entry.
+const STAFF_PATH = "staff";
 const STAFF_EMAIL_KEY = "storefront-staff-email";
 
 export const firebaseApp = initializeApp(firebaseConfig);
@@ -38,13 +39,22 @@ export const db = getDatabase(firebaseApp);
 export const firestore = getFirestore(firebaseApp);
 export const auth = getAuth(firebaseApp);
 
+async function isStaff(user) {
+  if (!user) {
+    return false;
+  }
+  const snapshot = await get(ref(db, `${STAFF_PATH}/${user.uid}`));
+  return snapshot.val() === true;
+}
+
 // ---- Staff sign-in -------------------------------------------------------
 // Staff type the password once on the kiosk. Firebase remembers the login on this device,
 // so later reloads sign straight back in with no prompt.
 let loginOverlay = null;
 
-function showStaffLogin() {
+function showStaffLogin(message = "") {
   if (loginOverlay) {
+    loginOverlay.querySelector("#staffLoginError").textContent = message;
     return;
   }
 
@@ -66,6 +76,7 @@ function showStaffLogin() {
   const passwordInput = loginOverlay.querySelector("#staffPassword");
   const errorText = loginOverlay.querySelector("#staffLoginError");
   emailInput.value = window.localStorage.getItem(STAFF_EMAIL_KEY) || "";
+  errorText.textContent = message;
 
   loginOverlay.querySelector("#staffLoginForm").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -85,14 +96,33 @@ function hideStaffLogin() {
   loginOverlay = null;
 }
 
-// Resolves once the staff account is signed in. Anonymous or other users are ignored.
+// Resolves once a staff account is signed in. Anonymous or other users are ignored.
+let authCheckId = 0;
 export const authReady = new Promise((resolve) => {
-  onAuthStateChanged(auth, (user) => {
-    if (user && user.uid === STAFF_UID) {
-      hideStaffLogin();
-      resolve(user);
+  onAuthStateChanged(auth, async (user) => {
+    const checkId = ++authCheckId;
+    if (!user) {
+      showStaffLogin();
       return;
     }
-    showStaffLogin();
+
+    try {
+      const staff = await isStaff(user);
+      if (checkId !== authCheckId) {
+        return; // a newer sign-in happened while we were checking
+      }
+      if (staff) {
+        hideStaffLogin();
+        resolve(user);
+        return;
+      }
+      showStaffLogin(user.isAnonymous ? "" : "This account is not set up as staff.");
+    } catch (error) {
+      if (checkId !== authCheckId) {
+        return;
+      }
+      console.warn("Could not check staff access", error);
+      showStaffLogin(`Could not check staff access (${error.code || error.message})`);
+    }
   });
 });
